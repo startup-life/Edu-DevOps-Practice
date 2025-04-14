@@ -1,5 +1,5 @@
 #!/bin/bash
 
-cd /home/ubuntu/backend
-docker compose pull
-docker compose up -d
+cd /var/lib/jenkins/backend
+/usr/local/bin/docker-compose pull
+/usr/local/bin/docker-compose up -d
