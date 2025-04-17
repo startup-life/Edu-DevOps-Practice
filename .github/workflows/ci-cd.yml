@@ -1,38 +1,13 @@
-name: Node.js CI/CD
+name: Express Blue/Green CI/CD
 
 on:
   push:
     branches:
-      - actions-2
-  pull_request:
-    branches:
-      - actions-2
+      - bluegreen
 
 jobs:
-  test:
+  build-and-push:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [16.x, 20.x, 22.x]
-
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run tests
-        run: npm test
-
-  build-and-push-image:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/actions-2'
-
     steps:
       - uses: actions/checkout@v2
 
@@ -42,27 +17,68 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
-      - name: Build and Push Docker Image
+      - name: Build and Push Image
         run: |
-          docker build --platform linux/amd64 -t ${{ secrets.DOCKER_USERNAME }}/express-hello-world:latest .
-          docker push ${{ secrets.DOCKER_USERNAME }}/express-hello-world:latest
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/express-healthcheck:latest .
+          docker push ${{ secrets.DOCKER_USERNAME }}/express-healthcheck:latest
 
   deploy:
-    needs: build-and-push-image
+    needs: build-and-push
     runs-on: ubuntu-latest
-
     steps:
-      - name: Prepare SSH Key
+      - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Deploy to EC2 via Docker Compose
+      - name: Deploy to EC2
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-          cd /home/${{ secrets.SERVER_USER }}/backend
-          docker compose pull
-          docker compose up -d
+          ssh -i ~/.ssh/id_rsa ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'bash -s' <<EOF
+          set -e
+          cd /home/${{ secrets.SERVER_USER }}/bluegreen
+
+          if docker ps | grep express-healthcheck-blue; then
+            TARGET=green
+            STOP=express-healthcheck-blue
+          elif docker ps | grep express-healthcheck-green; then
+            TARGET=blue
+            STOP=express-healthcheck-green
+          else
+            TARGET=blue
+            STOP=none
+          fi
+
+          echo "Deploying to: \$TARGET"
+          docker compose pull express-healthcheck-\$TARGET
+          docker compose up -d express-healthcheck-\$TARGET
+
+          if [ "\$STOP" != "none" ]; then
+            echo "Running health check..."
+            for i in {1..10}; do
+              sleep 2
+              if docker exec express-healthcheck-\$TARGET curl -s http://localhost:3000/health; then
+                echo "Health check passed"
+                break
+              elif [ \$i -eq 10 ]; then
+                echo "Health check failed. Rolling back..."
+                docker stop express-healthcheck-\$TARGET
+                docker compose restart \$STOP
+                exit 1
+              fi
+            done
+          else
+            echo "First deploy — skipping health check"
+          fi
+
+          echo "Switching Nginx to \$TARGET"
+          sed -i "s/express-healthcheck-[a-z]\\+/express-healthcheck-\$TARGET/g" nginx.conf
+          docker stop nginx-proxy || true
+          docker rm -f nginx-proxy || true
+          docker compose up -d nginx-proxy
+
+          if [ "\$STOP" != "none" ]; then
+            docker stop \$STOP || true
+          fi
           EOF

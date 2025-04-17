@@ -1,12 +1,12 @@
-// app.js
 const express = require('express');
 const app = express();
-const port = 3000;
+const PORT = 3000;
+const VERSION = process.env.VERSION || 'unknown';
 
-app.get('/', (req, res) => {
-    res.send('Hello, World!');
+app.get('/health', (req, res) => {
+    res.status(200).send(`OK - version: ${VERSION}`);
 });
 
-app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}, version: ${VERSION}`);
 });
