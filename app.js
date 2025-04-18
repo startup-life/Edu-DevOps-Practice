@@ -9,7 +9,7 @@ app.get('/health', (req, res) => {
     const ss = String(now.getSeconds()).padStart(2, '0');
     const timeString = `${hh}:${mm}:${ss}`;
 
-    res.status(200).send(`OK - ${timeString}`);
+    res.status(200).send(`OK - ${timeString} \n`);
 });
 
 app.listen(PORT, () => {
